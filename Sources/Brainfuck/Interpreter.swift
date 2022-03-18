@@ -13,7 +13,7 @@ enum BFIError: Error {
 
 public struct BFInterpreter {
     public enum BoundaryType { case unbounded, halfBounded, bounded(Int), boundless(Int) }
-    public enum CellWidth    { case eight, sixteen, thirtytwo, sixtyfour }
+    public enum CellWidth    { case eight, sixteen, thirtyTwo, sixtyFour }
     public enum EOFHandling  { case zero, minusOne, unchanged } // maybe mode for "wait until more input"
     
     // tape settings
@@ -23,8 +23,9 @@ public struct BFInterpreter {
     let useSignedCells:  Bool
 
     // IO settings
-    let eofHandling: EOFHandling
-    let useAsciiIO:  Bool
+    let eofHandling:    EOFHandling
+    let filteringInput: Bool
+    let useAsciiIO:     Bool
 
     // dev settings
     let useDebugCommand:    Bool
@@ -32,44 +33,47 @@ public struct BFInterpreter {
     
     // interpreter settings
     let useInputSplitter: Bool
-    let filterSplitInput: Bool
-    let preloadJumps:     Bool
-    let ignoreErrors:     Bool
+    let mappingJumps:     Bool
+    let ignoringErrors:   Bool
 
-    public init(boundaryType:    BoundaryType = .halfBounded,
+    public init(boundaryType:    BoundaryType = .unbounded,
                 cellWidth:       CellWidth    = .eight,
                 cellWrapping:    Bool = true,
                 useSignedCells:  Bool = false,
                 
-                eofHandling:  EOFHandling = .unchanged,
-                useAsciiIO:   Bool = true,
+                eofHandling:    EOFHandling = .unchanged,
+                filteringInput: Bool = false,
+                useAsciiIO:     Bool = true,
                 
                 useDebugCommand:    Bool = false,
                 debugBreaksProgram: Bool = false,
                 
                 useInputSplitter: Bool = false,
-                filterSplitInput: Bool = false,
-                preloadJumps:     Bool = true,
-                ignoreErrors:     Bool = false) {
+                mappingJumps:     Bool = true,
+                ignoringErrors:   Bool = false) {
 
         self.boundaryType    = boundaryType
         self.cellWrapping    = cellWrapping
         self.cellWidth       = cellWidth
         self.useSignedCells  = useSignedCells
 
-        self.eofHandling = eofHandling
-        self.useAsciiIO  = useAsciiIO
+        self.eofHandling    = eofHandling
+        self.filteringInput = filteringInput
+        self.useAsciiIO     = useAsciiIO
 
         self.useDebugCommand    = useDebugCommand
         self.debugBreaksProgram = debugBreaksProgram
         
         self.useInputSplitter = useInputSplitter
-        self.filterSplitInput = filterSplitInput
-        self.preloadJumps     = preloadJumps
-        self.ignoreErrors     = ignoreErrors
+        self.mappingJumps     = mappingJumps
+        self.ignoringErrors   = ignoringErrors
+    }
+    
+    public func run(_ program: String, with stringInput: String = "") throws {
+        try self.run(program, with: stringInput.compactMap { $0.asciiValue })
     }
 
-    public func read<T: FixedWidthInteger>(_ initialString: String, with initialInput: [T]) throws {
+    public func run<T: FixedWidthInteger>(_ initialString: String, with initialInput: [T]) throws {
         var input   = initialInput
         var program = initialString.compactMap { BFCommand(rawValue: $0) }
         
@@ -78,18 +82,34 @@ public struct BFInterpreter {
             let array  = string.split(maxSplits: 1, whereSeparator: { $0 == "!" })
             
             if array.count > 1 {
-                var _input = array[1]
-                
-                if self.filterSplitInput { _input = _input.filter { BFCommand(rawValue: $0) != nil } }
+//                if self.filterInput {
+//                    _input = _input.filter { BFCommand(rawValue: $0) != nil }
+//                    if !self.useDebugCommand { _input = _input.filter { $0 != BFCommand.debug.rawValue } }
+//                }
                 
                 // StreamTypeConverter comes from Toolkit, and is very handy for this package
-                input = StreamTypeConverter.convert(_input.compactMap { $0.asciiValue }, toType: 0 as T)
+                input = StreamTypeConverter.convert(array[1].compactMap { $0.asciiValue }, toType: 0 as T)
             }
             
             program = array[0].compactMap { BFCommand(rawValue: $0) }
         }
         
         if !self.useDebugCommand { program = program.filter { $0 != .debug } }
+        
+        if self.filteringInput {
+            if !self.useDebugCommand { input = input.filter { $0 != BFCommand.debug.rawValue.asciiValue! } }
+            input = input.filter {
+                $0 == BFCommand.left.rawValue.asciiValue!
+                || $0 == BFCommand.right.rawValue.asciiValue!
+                || $0 == BFCommand.plus.rawValue.asciiValue!
+                || $0 == BFCommand.minus.rawValue.asciiValue!
+                || $0 == BFCommand.jump.rawValue.asciiValue!
+                || $0 == BFCommand.bjump.rawValue.asciiValue!
+                || $0 == BFCommand.read.rawValue.asciiValue!
+                || $0 == BFCommand.write.rawValue.asciiValue!
+                || $0 == BFCommand.debug.rawValue.asciiValue!
+            }
+        }
         
         // pretty print commands; for magic logger
         // print(program.map { String($0.rawValue) }.reduce("", +))
@@ -105,7 +125,7 @@ public struct BFInterpreter {
 
         var maps: ([Int: Int], [Int: Int]) = ([:], [:])
         
-        if self.preloadJumps {
+        if self.mappingJumps {
             var stack: [Int] = []
 
             var map:  [Int: Int] = [:]
@@ -135,49 +155,49 @@ public struct BFInterpreter {
 
         if self.useSignedCells {
             switch self.cellWidth {
-            case .eight:     try self.run(program,
-                                          onTape:    StreamTypeConverter.convert(tape,  toType: 0 as Int8),
-                                          withInput: StreamTypeConverter.convert(input, toType: 0 as Int8),
-                                          using:     maps)
-            case .sixteen:   try self.run(program,
-                                          onTape:    StreamTypeConverter.convert(tape,  toType: 0 as Int16),
-                                          withInput: StreamTypeConverter.convert(input, toType: 0 as Int16),
-                                          using:     maps)
-            case .thirtytwo: try self.run(program,
-                                          onTape:    StreamTypeConverter.convert(tape,  toType: 0 as Int32),
-                                          withInput: StreamTypeConverter.convert(input, toType: 0 as Int32),
-                                          using:     maps)
-            case .sixtyfour: try self.run(program,
-                                          onTape:    StreamTypeConverter.convert(tape,  toType: 0 as Int64),
-                                          withInput: StreamTypeConverter.convert(input, toType: 0 as Int64),
-                                          using:     maps)
+            case .eight:     try self.operate(program,
+                                              onTape:    StreamTypeConverter.convert(tape,  toType: 0 as Int8),
+                                              withInput: StreamTypeConverter.convert(input, toType: 0 as Int8),
+                                              using:     maps)
+            case .sixteen:   try self.operate(program,
+                                              onTape:    StreamTypeConverter.convert(tape,  toType: 0 as Int16),
+                                              withInput: StreamTypeConverter.convert(input, toType: 0 as Int16),
+                                              using:     maps)
+            case .thirtyTwo: try self.operate(program,
+                                              onTape:    StreamTypeConverter.convert(tape,  toType: 0 as Int32),
+                                              withInput: StreamTypeConverter.convert(input, toType: 0 as Int32),
+                                              using:     maps)
+            case .sixtyFour: try self.operate(program,
+                                              onTape:    StreamTypeConverter.convert(tape,  toType: 0 as Int64),
+                                              withInput: StreamTypeConverter.convert(input, toType: 0 as Int64),
+                                              using:     maps)
             }
         } else {
             switch self.cellWidth {
-            case .eight:     try self.run(program,
-                                          onTape:    tape,
-                                          withInput: StreamTypeConverter.convert(input, toType: 0 as UInt8),
-                                          using:     maps)
-            case .sixteen:   try self.run(program,
-                                          onTape:    StreamTypeConverter.convert(tape,  toType: 0 as UInt16),
-                                          withInput: StreamTypeConverter.convert(input, toType: 0 as UInt16),
-                                          using:     maps)
-            case .thirtytwo: try self.run(program,
-                                          onTape:    StreamTypeConverter.convert(tape,  toType: 0 as UInt32),
-                                          withInput: StreamTypeConverter.convert(input, toType: 0 as UInt32),
-                                          using:     maps)
-            case .sixtyfour: try self.run(program,
-                                          onTape:    StreamTypeConverter.convert(tape,  toType: 0 as UInt64),
-                                          withInput: StreamTypeConverter.convert(input, toType: 0 as UInt64),
-                                          using:     maps)
+            case .eight:     try self.operate(program,
+                                              onTape:    tape,
+                                              withInput: StreamTypeConverter.convert(input, toType: 0 as UInt8),
+                                              using:     maps)
+            case .sixteen:   try self.operate(program,
+                                              onTape:    StreamTypeConverter.convert(tape,  toType: 0 as UInt16),
+                                              withInput: StreamTypeConverter.convert(input, toType: 0 as UInt16),
+                                              using:     maps)
+            case .thirtyTwo: try self.operate(program,
+                                              onTape:    StreamTypeConverter.convert(tape,  toType: 0 as UInt32),
+                                              withInput: StreamTypeConverter.convert(input, toType: 0 as UInt32),
+                                              using:     maps)
+            case .sixtyFour: try self.operate(program,
+                                              onTape:    StreamTypeConverter.convert(tape,  toType: 0 as UInt64),
+                                              withInput: StreamTypeConverter.convert(input, toType: 0 as UInt64),
+                                              using:     maps)
             }
         }
     }
 
-    private func run<T: FixedWidthInteger>(_ program:    [BFCommand],
-                                      onTape initialTape:        [T],
-                                   withInput initialInput:       [T],
-                                       using maps:  ([Int: Int], [Int: Int])) throws {
+    private func operate<T: FixedWidthInteger>(_ program:    [BFCommand],
+                                          onTape initialTape:        [T],
+                                       withInput initialInput:       [T],
+                                           using maps:  ([Int: Int], [Int: Int])) throws {
 
         var  flipped = false
         var  tape    = initialTape
@@ -214,7 +234,7 @@ public struct BFInterpreter {
 
                         flipped = true
                     case .halfBounded, .bounded:
-                        if self.ignoreErrors { pointer = 0 } else { throw BFIError.pointerOutOfBounds }
+                        if self.ignoringErrors { pointer = 0 } else { throw BFIError.pointerOutOfBounds }
                     case .boundless:
                         pointer = tape.endIndex - 1
                     }
@@ -235,7 +255,7 @@ public struct BFInterpreter {
                     case .unbounded, .halfBounded:
                         tape.append(0)
                     case .bounded:
-                        if self.ignoreErrors { pointer = tape.endIndex - 1 } else { throw BFIError.pointerOutOfBounds }
+                        if self.ignoringErrors { pointer = tape.endIndex - 1 } else { throw BFIError.pointerOutOfBounds }
                     case .boundless:
                         pointer = 0
                     }
@@ -246,7 +266,7 @@ public struct BFInterpreter {
                 if !self.cellWrapping && tape[index] == .min {
                     tape[index] &-= 1
 
-                    if !self.ignoreErrors { throw BFIError.cellLimitReached }
+                    if !self.ignoringErrors { throw BFIError.cellLimitReached }
                 }
             case .minus:
                 tape[index] &-= 1
@@ -254,10 +274,10 @@ public struct BFInterpreter {
                 if !self.cellWrapping && tape[index] == .max {
                     tape[index] &+= 1
 
-                    if !self.ignoreErrors { throw BFIError.cellLimitReached }
+                    if !self.ignoringErrors { throw BFIError.cellLimitReached }
                 }
             case .jump:
-                if self.preloadJumps {
+                if self.mappingJumps {
                     if tape[index] == 0 { _pointer = map[_pointer]! }
                 } else {
                     stack.append(_pointer)
@@ -275,7 +295,7 @@ public struct BFInterpreter {
                     }
                 }
             case .bjump:
-                if self.preloadJumps {
+                if self.mappingJumps {
                     if tape[index] != 0 { _pointer = bmap[_pointer]! }
                 } else {
                     if let location = stack.popLast() {
