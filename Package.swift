@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "swift-brainfuck-interpreter",
+    name: "swift-brainfuck",
     products: [
         .library(
             name: "Brainfuck",
